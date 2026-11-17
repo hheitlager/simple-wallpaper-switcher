@@ -2,6 +2,15 @@
 
 ![Simple Wallpaper Switcher showing the picker and wallpaper changes](assets/simple-wallpaper-switcher-demo.gif)
 
+## Screenshots
+| Solid | Blurred |
+|:---:|:---:|
+| ![Solid](https://raw.githubusercontent.com/hheitlager/simple-wallpaper-switcher/main/assets/simple-wallpaper-switcher-solid-material.png) | ![Blurred](https://raw.githubusercontent.com/hheitlager/simple-wallpaper-switcher/main/assets/simple-wallpaper-switcher-blur-material.png) |
+
+| Acrylic | Quick-menu |
+|:---:|:---:|
+| ![Acrylic](https://raw.githubusercontent.com/hheitlager/simple-wallpaper-switcher/main/assets/simple-wallpaper-switcher-acrylic-material.png) | ![Quick-menu](https://raw.githubusercontent.com/hheitlager/simple-wallpaper-switcher/main/assets/simple-wallpaper-switcher-taskbar-quick-menu.png) |
+
 ### Your wallpaper collection, ready when you are.
 
 Browse your wallpapers in a compact visual picker, choose a new look, and watch it transition onto your desktop.
