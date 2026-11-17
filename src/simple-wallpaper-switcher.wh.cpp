@@ -593,8 +593,6 @@ void LoadSettings() {
         // becomes the active folder. Keep a snapshot to distinguish this from
         // a newer folder chosen inside the picker on a later restart.
         g_folder = configuredFolder;
-        Wh_Log(L"[FolderDiag] LoadSettings: configured folder changed; using Windhawk setting '%ls' (previous snapshot '%ls')",
-               configuredFolder.c_str(), lastConfiguredFolder.c_str());
         Wh_SetStringValue(L"wallpaperFolder", g_folder.c_str());
         Wh_SetStringValue(L"wallpaperFolderSettingSnapshot",
                           configuredFolder.c_str());
@@ -606,9 +604,6 @@ void LoadSettings() {
         if (g_folder.empty()) {
             g_folder = configuredFolder;
         }
-        Wh_Log(L"[FolderDiag] LoadSettings: setting unchanged; using %ls folder '%ls' (configured '%ls')",
-               storedRuntimeFolder.empty() ? L"configured" : L"stored runtime",
-               g_folder.c_str(), configuredFolder.c_str());
     }
     g_lastSelectedPath = ReadStringSetting(L"lastSelectedWallpaper");
     LoadHotkeySetting();
@@ -842,8 +837,6 @@ DWORD WINAPI ThumbnailPageThreadProc(void* parameter) {
     return 0;
 }
 void PersistFolder() {
-    Wh_Log(L"[FolderDiag] PersistFolder: requesting persistent runtime folder write '%ls'",
-           g_folder.c_str());
     Wh_SetStringValue(L"wallpaperFolder", g_folder.c_str());
 }
 
@@ -853,8 +846,6 @@ void PersistSelectedImage(int image) {
     }
     g_selectedImage = image;
     g_lastSelectedPath = g_images[(size_t)image];
-    Wh_Log(L"[WallpaperDiag] PersistSelectedImage: saved last-selected image '%ls'",
-           g_lastSelectedPath.c_str());
     Wh_SetStringValue(L"lastSelectedWallpaper", g_lastSelectedPath.c_str());
 }
 
@@ -1643,8 +1634,6 @@ void RefreshList() {
 
 void StartImageScan() {
     const std::uint64_t generation = ++g_folderGeneration;
-    Wh_Log(L"[FolderDiag] StartImageScan: scanning folder '%ls'",
-           g_folder.c_str());
     g_images.clear();
     g_viewAnchor = 0;
     g_page = 0;
@@ -1655,7 +1644,6 @@ void StartImageScan() {
     ClearThumbnailCache();
 
     if (g_folder.empty()) {
-        Wh_Log(L"[FolderDiag] StartImageScan: folder is empty; scan skipped");
         RefreshList();
         return;
     }
@@ -1670,7 +1658,7 @@ void StartImageScan() {
         delete job;
         g_imageScanInProgress = false;
         g_folderUnavailable = true;
-        Wh_Log(L"[FolderDiag] StartImageScan: could not start scan thread for '%ls'",
+        Wh_Log(L"Could not start wallpaper scan for '%ls'",
                g_folder.c_str());
         UpdatePageLabel();
     }
@@ -2782,9 +2770,6 @@ WallpaperTransition ChooseWallpaperTransition() {
 void StartWallpaperChange(int image) {
     if (g_shuttingDown.load() || image < 0 || image >= (int)g_images.size() ||
         !g_hostWindow) {
-        Wh_Log(L"[WallpaperDiag] StartWallpaperChange: ignored request (shutdown=%d image=%d count=%d host=%d)",
-               g_shuttingDown.load(), image, (int)g_images.size(),
-               g_hostWindow != nullptr);
         return;
     }
     POINT cursor{};
@@ -2792,7 +2777,7 @@ void StartWallpaperChange(int image) {
     HMONITOR monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
     MONITORINFO info{sizeof(info)};
     if (!monitor || !GetMonitorInfoW(monitor, &info)) {
-        Wh_Log(L"[WallpaperDiag] StartWallpaperChange: unable to identify target monitor for '%ls'",
+        Wh_Log(L"Could not identify target monitor for '%ls'",
                g_images[image].c_str());
         return;
     }
@@ -2800,7 +2785,6 @@ void StartWallpaperChange(int image) {
     if (g_transitionActive && !EqualRect(&g_transitionMonitor, &info.rcMonitor)) {
         // A single overlay belongs to one monitor. Preserve the in-flight
         // effect and apply cross-monitor requests directly to avoid misplacing it.
-        Wh_Log(L"[WallpaperDiag] Retarget requested on another monitor; applying directly");
         if (SetWallpaperForMonitor(info.rcMonitor, g_images[image].c_str())) {
             g_currentImage = image;
             g_transitionCurrentSuperseded = true;
@@ -2810,7 +2794,6 @@ void StartWallpaperChange(int image) {
     }
     if (!g_transitionActive &&
         IsWallpaperAlreadySet(info.rcMonitor, g_images[image].c_str())) {
-        Wh_Log(L"[WallpaperDiag] StartWallpaperChange: image is already set on target monitor; no wallpaper API call needed");
         g_currentImage = image;
         PersistSelectedImage(image);
         for (HWND tile : g_tiles) {
@@ -2843,12 +2826,8 @@ void StartWallpaperChange(int image) {
 
     if (g_transitionActive) {
         if (request.path == g_transitionPath) {
-            Wh_Log(L"[WallpaperDiag] Active transition already targets '%ls'",
-                   request.path.c_str());
             return;
         }
-        Wh_Log(L"[WallpaperDiag] Retargeting active transition to '%ls'",
-               request.path.c_str());
         PublishWallpaperRequest(request);
         g_transitionPath = request.path;
         return;
@@ -2867,13 +2846,11 @@ void StartWallpaperChange(int image) {
     g_wallpaperThread = CreateThread(nullptr, 0, WallpaperChangeThreadProc,
                                      change, 0, nullptr);
     if (!g_wallpaperThread) {
-        Wh_Log(L"[WallpaperDiag] StartWallpaperChange: transition thread creation failed; trying direct apply");
+        Wh_Log(L"Transition worker creation failed; applying wallpaper directly");
         delete change;
         g_transitionActive = false;
         g_transitionPath.clear();
         if (SetWallpaperForMonitor(info.rcMonitor, g_images[image].c_str())) {
-            Wh_Log(L"[WallpaperDiag] StartWallpaperChange: direct apply succeeded for '%ls'",
-                   g_images[image].c_str());
             g_currentImage = image;
             for (HWND tile : g_tiles) {
                 if (tile) {
@@ -2881,7 +2858,7 @@ void StartWallpaperChange(int image) {
                 }
             }
         } else {
-            Wh_Log(L"[WallpaperDiag] StartWallpaperChange: direct apply failed for '%ls'",
+            Wh_Log(L"Failed to apply wallpaper directly for '%ls'",
                    g_images[image].c_str());
         }
     }
@@ -2889,12 +2866,8 @@ void StartWallpaperChange(int image) {
 
 void ApplyImageIndex(int image) {
     if (image < 0 || image >= (int)g_images.size()) {
-        Wh_Log(L"[WallpaperDiag] ApplyImageIndex: ignored invalid request (image=%d count=%d)",
-               image, (int)g_images.size());
         return;
     }
-    Wh_Log(L"[WallpaperDiag] ApplyImageIndex: user requested apply for '%ls'",
-           g_images[(size_t)image].c_str());
     PersistSelectedImage(image);
     UpdateFolderLabel();
     for (HWND tile : g_tiles) {
@@ -2953,8 +2926,6 @@ void MoveSelection(int delta) {
     const int count = (int)g_images.size();
     const int next = (current + delta % count + count) % count;
     g_selectedImage = next;
-    Wh_Log(L"[WallpaperDiag] MoveSelection: highlighted '%ls'; no apply requested (press Enter/Space or click to apply)",
-           g_images[(size_t)next].c_str());
     const size_t page = PageForImageIndex((size_t)next);
     if (page != g_page) {
         g_page = page;
@@ -2990,8 +2961,6 @@ bool HandlePickerKey(UINT key) {
         case VK_SPACE:
         case VK_RETURN:
             if (g_selectedImage >= 0) {
-                Wh_Log(L"[WallpaperDiag] HandlePickerKey: %ls pressed; applying highlighted image",
-                       key == VK_RETURN ? L"Enter" : L"Space");
                 ApplyImageIndex(g_selectedImage);
             }
             return true;
@@ -4272,19 +4241,6 @@ void ShowTrayMenu(HWND hwnd, POINT callbackPoint) {
     // Use the screen point supplied with the tray callback itself. The hidden
     // icons flyout may be repositioned by shell mods, so Shell_NotifyIconGetRect
     // is not reliable for locating an icon currently shown in that flyout.
-    MONITORINFO monitorInfo{sizeof(monitorInfo)};
-    HMONITOR monitor =
-        MonitorFromPoint(callbackPoint, MONITOR_DEFAULTTONEAREST);
-    if (monitor && GetMonitorInfoW(monitor, &monitorInfo)) {
-        Wh_Log(L"[TrayMenuDiag] Showing tray menu at callback point (%ld,%ld), monitor work area (%ld,%ld)-(%ld,%ld)",
-               callbackPoint.x, callbackPoint.y,
-               monitorInfo.rcWork.left, monitorInfo.rcWork.top,
-               monitorInfo.rcWork.right, monitorInfo.rcWork.bottom);
-    } else {
-        Wh_Log(L"[TrayMenuDiag] Showing tray menu at callback point (%ld,%ld)",
-               callbackPoint.x, callbackPoint.y);
-    }
-
     const UINT flags = TPM_RIGHTBUTTON | TPM_LEFTALIGN | TPM_TOPALIGN |
                        TPM_WORKAREA;
 
@@ -4367,8 +4323,6 @@ LRESULT CALLBACK PickerProc(HWND hwnd, UINT message, WPARAM wParam,
                     }
                     std::wstring folder;
                     if (PickFolder(hwnd, &folder)) {
-                        Wh_Log(L"[FolderDiag] Picker folder chooser selected '%ls'",
-                               folder.c_str());
                         g_folder = std::move(folder);
                         g_page = 0;
                         g_currentImage = -1;
@@ -4383,8 +4337,6 @@ LRESULT CALLBACK PickerProc(HWND hwnd, UINT message, WPARAM wParam,
                 const size_t slot = LOWORD(wParam) - kFirstTileId;
                 const int image = (int)ImageIndexForPageSlot(g_page, slot);
                 if (!g_images.empty()) {
-                    Wh_Log(L"[WallpaperDiag] Tile click: applying image '%ls'",
-                           g_images[(size_t)image].c_str());
                     SetFocus(g_tiles[slot]);
                     ApplyImageIndex(image);
                 }
@@ -4628,9 +4580,6 @@ LRESULT CALLBACK HostProc(HWND hwnd, UINT message, WPARAM wParam,
             if (result->generation == g_folderGeneration.load()) {
                 g_imageScanInProgress = false;
                 g_folderUnavailable = result->folderUnavailable;
-                Wh_Log(L"[FolderDiag] Image scan completed: folder='%ls' supportedImages=%d unavailable=%d",
-                       g_folder.c_str(), (int)result->images.size(),
-                       result->folderUnavailable);
                 g_images = std::move(result->images);
                 g_page = 0;
                 g_selectedImage = g_images.empty() ? -1 : 0;
@@ -4685,8 +4634,6 @@ LRESULT CALLBACK HostProc(HWND hwnd, UINT message, WPARAM wParam,
             return 0;
         }
         case kWallpaperChangeDone:
-            Wh_Log(L"[WallpaperDiag] Wallpaper change completed: path='%ls' success=%d",
-                   g_transitionPath.c_str(), lParam != 0);
             g_transitionActive = false;
             if (lParam && !g_transitionCurrentSuperseded &&
                 (int)wParam >= 0 && (size_t)wParam < g_images.size() &&
@@ -4713,8 +4660,6 @@ LRESULT CALLBACK HostProc(HWND hwnd, UINT message, WPARAM wParam,
             }
             return 0;
         case kReloadSettings:
-            Wh_Log(L"[FolderDiag] kReloadSettings received; rescanning active folder '%ls'",
-                   g_folder.c_str());
             RefreshPickerAppearance(g_pickerWindow);
             if (!RegisterPickerHotkey(hwnd)) {
                 Wh_Log(L"RegisterHotKey failed after settings change");
@@ -4887,13 +4832,10 @@ BOOL WhTool_ModInit() {
 }
 
 void WhTool_ModSettingsChanged() {
-    Wh_Log(L"[FolderDiag] WhTool_ModSettingsChanged: Windhawk settings callback fired (typically after Save settings)");
     LoadSettings();
     if (g_hostWindow) {
-        Wh_Log(L"[FolderDiag] WhTool_ModSettingsChanged: posting settings reload to host window");
         PostMessageW(g_hostWindow, kReloadSettings, 0, 0);
     } else {
-        Wh_Log(L"[FolderDiag] WhTool_ModSettingsChanged: host window is not available");
     }
 }
 
