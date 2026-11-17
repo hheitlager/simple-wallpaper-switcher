@@ -3,7 +3,8 @@
 // @name            Simple Wallpaper Switcher
 // @description     A standalone Windhawk mod for choosing wallpapers from one folder.
 // @version         0.1.2
-// @author          Hendrik Heitlager
+// @author          HHeitlager
+// @github          https://github.com/hheitlager
 // @include         windhawk.exe
 // @compilerOptions -DWIN32_LEAN_AND_MEAN -lole32 -loleaut32 -lruntimeobject -lshell32 -lcomctl32 -lshlwapi -luuid -ldwmapi -luxtheme -lgdi32 -lmsimg32 -ld2d1 -lwindowscodecs -lgdiplus -ladvapi32
 // @license         MIT
@@ -13,20 +14,32 @@
 /*
 # Simple Wallpaper Switcher
 
-A standalone Windhawk mod for choosing wallpapers from one folder.
+![Simple Wallpaper Switcher showing the picker and wallpaper changes](https://raw.githubusercontent.com/hheitlager/simple-wallpaper-switcher/main/assets/simple-wallpaper-switcher-demo.gif)
 
-Open or toggle the picker with the configured hotkey or a left-click on the tray icon. Press Escape or click outside the picker to close it. The compact centered picker shows 12 rounded thumbnails in a four-column grid. Click a thumbnail to apply it immediately. Use the arrow keys to move the selection, then press Enter or Space to apply the highlighted image. Scroll the wheel to change pages; page navigation wraps at either end, and a partial final page continues with images from the start of the collection. The header shows the selected image path from the chosen root folder. Click the root folder name to choose another folder, click a subfolder name to jump to its first image, or click a folder divider to choose one of its child folders. Choosing a subfolder starts page 1 at its first image while the full collection remains in sequence. The divider points down while its menu is open; a backslash and image glyph mark the filename.
+### Your wallpaper collection, ready when you are.
 
-Wallpaper changes target the monitor under the pointer and use that monitor's Windows wallpaper position setting. Fade, Circle, Slide, Zoom, Wipe, Dissolve, Blur Fade, Split Reveal, and Random transitions are available. Wipe and Split Reveal choose a random orientation for each change, and Random avoids repeating the previous effect. If transition setup fails, the wallpaper is still applied without animation.
+Browse your wallpapers in a compact visual picker, choose a new look, and watch it transition onto your desktop.
 
-The Appearance settings include Windows / System colors and the shared built-in theme palettes used by the other Emberveil mods. Solid is the default background material; Blur and Acrylic use the Windows composition effect and fall back to Solid when unavailable.
+## Find your next wallpaper
 
-## Limits and folder behavior
+See your collection as a grid of thumbnails. Browse folders with the breadcrumb menu, click a wallpaper to apply it, or use the keyboard to move through your collection.
 
-- The chosen folder is the root. Supported images are indexed recursively and sorted in natural relative-path order (for example, `2` comes before `10`). Reparse-point directories (junctions and symbolic links) are skipped to avoid recursive loops. Thumbnails are decoded directly from the image files and visible tiles repaint as each page loads. Tiles show a subtle Segoe Fluent Icons loading glyph while their page is being decoded. Only the current page and its previous/next page thumbnails are kept in the rolling cache. The last wallpaper selected through the mod is remembered and restored when the picker opens again.
-- Supported formats: JPEG (`.jpg`, `.jpeg`, `.jfif`), PNG, BMP, and WebP. Other formats are ignored.
-- An empty folder shows “No supported images found.” A missing or unreadable folder shows “Folder unavailable or unreadable.”
-- Choosing an image that is already the wallpaper on the monitor under the pointer is a no-op. The same image can still be applied to another monitor.
+## Stay in the flow
+
+Choose another wallpaper while a transition is running. The effect retargets to your latest choice, so you can keep browsing without waiting for each change to finish.
+
+## Make it yours
+
+Choose from the shared Emberveil themes and set the picker background to Solid, Blur, or Acrylic. Pick a transition effect, or let Random choose one for you.
+
+## Get started
+
+Set your wallpaper folder in the mod settings, then open the picker from its tray icon or keyboard shortcut.
+
+Click a thumbnail to apply it. Use the arrow keys to move, Enter or Space to apply, and the mouse wheel to change pages.
+
+Supported image formats: JPEG, PNG, BMP, and WebP.
+
 
 */
 // ==/WindhawkModReadme==
