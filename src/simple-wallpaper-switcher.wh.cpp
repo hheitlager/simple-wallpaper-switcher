@@ -140,7 +140,6 @@ Supported image formats: JPEG, PNG, BMP, and WebP.
 #include <algorithm>
 #include <atomic>
 #include <cmath>
-#include <cstring>
 #include <cstdint>
 #include <cstdlib>
 #include <cwchar>
@@ -183,8 +182,6 @@ COLORREF g_surface = RGB(68, 64, 90);
 COLORREF g_text = RGB(205, 214, 244);
 COLORREF g_muted = RGB(166, 173, 200);
 COLORREF g_accent = RGB(207, 161, 255);
-COLORREF g_accentText = RGB(48, 45, 71);
-COLORREF g_border = RGB(88, 83, 111);
 std::wstring g_configuredTheme = L"system";
 std::wstring g_configuredMaterial = L"solid";
 bool g_automaticTheme = false;
@@ -487,12 +484,6 @@ void ApplyPickerThemeColors() {
         g_text = MixThemeColors(g_text, RGB(255, 255, 255), 45);
         g_muted = MixThemeColors(g_muted, RGB(255, 255, 255), 72);
     }
-    g_border = MixThemeColors(g_background, g_muted, 30);
-    const int accentLuminance = 299 * GetRValue(g_accent) +
-                                587 * GetGValue(g_accent) +
-                                114 * GetBValue(g_accent);
-    g_accentText = accentLuminance >= 128000 ? RGB(0, 0, 0)
-                                             : RGB(255, 255, 255);
 }
 
 void LoadHotkeySetting() {
@@ -3182,68 +3173,6 @@ HFONT CreatePickerFont(HWND hwnd) {
                        L"Segoe UI Variable Text");
 }
 
-HWND CreateStyledButton(HWND parent, PCWSTR text, int id, int x, int y,
-                        int width, int height, bool primary = false) {
-    HWND button = CreateWindowExW(0, L"BUTTON", text,
-        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, x, y, width, height, parent,
-        (HMENU)(INT_PTR)id, GetModuleHandleW(nullptr), nullptr);
-    if (button && g_pickerFont) {
-        SendMessageW(button, WM_SETFONT, (WPARAM)g_pickerFont, TRUE);
-    }
-    if (button && primary) {
-        SetPropW(button, L"WallpaperSwitcherPrimary", (HANDLE)1);
-    }
-    return button;
-}
-
-void DrawStyledButton(const DRAWITEMSTRUCT* item) {
-    if (!item || item->CtlType != ODT_BUTTON) {
-        return;
-    }
-    const bool primary = GetPropW(item->hwndItem,
-                                  L"WallpaperSwitcherPrimary") != nullptr;
-    const bool disabled = (item->itemState & ODS_DISABLED) != 0;
-    const bool pressed = (item->itemState & ODS_SELECTED) != 0;
-    const bool hot = (item->itemState & ODS_HOTLIGHT) != 0;
-    COLORREF fill = primary ? g_accent : g_surface;
-    if (disabled) {
-        fill = g_background;
-    } else if (pressed) {
-        fill = primary ? RGB(186, 140, 235) : RGB(60, 56, 82);
-    } else if (hot) {
-        fill = primary ? RGB(218, 184, 255) : RGB(65, 60, 91);
-    }
-    HBRUSH brush = CreateSolidBrush(fill);
-    HPEN pen = CreatePen(PS_SOLID, 1, primary ? g_accent : g_border);
-    HGDIOBJ oldBrush = SelectObject(item->hDC, brush);
-    HGDIOBJ oldPen = SelectObject(item->hDC, pen);
-    HGDIOBJ oldFont = g_pickerFont
-                          ? SelectObject(item->hDC, g_pickerFont)
-                          : nullptr;
-    const RECT r = item->rcItem;
-    FillRect(item->hDC, &r, g_backgroundBrush);
-    RoundRect(item->hDC, r.left, r.top, r.right, r.bottom, 10, 10);
-    SetBkMode(item->hDC, TRANSPARENT);
-    SetTextColor(item->hDC, disabled ? g_muted : (primary ? g_accentText : g_text));
-    WCHAR text[128]{};
-    GetWindowTextW(item->hwndItem, text, ARRAYSIZE(text));
-    RECT textRect = r;
-    DrawTextW(item->hDC, text, -1, &textRect,
-              DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    if (item->itemState & ODS_FOCUS) {
-        RECT focus = r;
-        InflateRect(&focus, -4, -4);
-        DrawFocusRect(item->hDC, &focus);
-    }
-    if (oldFont) {
-        SelectObject(item->hDC, oldFont);
-    }
-    SelectObject(item->hDC, oldBrush);
-    SelectObject(item->hDC, oldPen);
-    DeleteObject(brush);
-    DeleteObject(pen);
-}
-
 void DrawRotatedBreadcrumbChevron(HDC dc, const RECT& rect,
                                   float angleDegrees) {
     const WCHAR chevron[] = {0xF745, L'\0'};
@@ -4369,10 +4298,10 @@ LRESULT CALLBACK PickerProc(HWND hwnd, UINT message, WPARAM wParam,
             if (DrawBreadcrumb(item)) {
                 return TRUE;
             }
-            if (!DrawTileButton(item)) {
-                DrawStyledButton(item);
+            if (DrawTileButton(item)) {
+                return TRUE;
             }
-            return TRUE;
+            break;
         }
         case WM_CTLCOLORSTATIC:
             SetTextColor((HDC)wParam,
