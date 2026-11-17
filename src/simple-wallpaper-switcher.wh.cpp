@@ -1,7 +1,7 @@
 // ==WindhawkMod==
 // @id              simple-wallpaper-switcher
 // @name            Simple Wallpaper Switcher
-// @description     A standalone Windhawk mod for choosing wallpapers from one folder.
+// @description     Browse your wallpaper folders, preview thumbnails, and switch with smooth transitions.
 // @version         0.1.2
 // @author          HHeitlager
 // @github          https://github.com/hheitlager
