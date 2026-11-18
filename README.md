@@ -1,6 +1,6 @@
 # Simple Wallpaper Switcher
 
-![Simple Wallpaper Switcher showing the picker and wallpaper changes](assets/simple-wallpaper-switcher-demo.gif)
+![Simple Wallpaper Switcher showing the picker and wallpaper changes](assets/simple-wallpaper-switcher-banner.gif)
 
 ## Screenshots
 | Solid | Blurred |

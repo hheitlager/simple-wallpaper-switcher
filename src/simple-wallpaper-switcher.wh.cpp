@@ -14,7 +14,7 @@
 /*
 # Simple Wallpaper Switcher
 
-![Simple Wallpaper Switcher showing the picker and wallpaper changes](https://raw.githubusercontent.com/hheitlager/simple-wallpaper-switcher/main/assets/simple-wallpaper-switcher-demo.gif)
+![Simple Wallpaper Switcher showing the picker and wallpaper changes](https://raw.githubusercontent.com/hheitlager/simple-wallpaper-switcher/main/assets/simple-wallpaper-switcher-banner.gif)
 
 ## Screenshots
 | Solid | Blurred |
