@@ -31,6 +31,10 @@ Choose from the shared Emberveil themes and set the picker background to Solid, 
 
 Set your wallpaper folder in the mod settings, then open the picker from its tray icon or keyboard shortcut.
 
-Click a thumbnail to apply it. Use the arrow keys to move, Enter or Space to apply, and the mouse wheel to change pages.
+Click a thumbnail to apply it. Use the arrow keys to move, Enter or Space to apply, and the mouse wheel to change pages. Click the magnifying glass in the breadcrumb, or start typing, to filter filenames in the current folder. Press Escape to clear the search.
 
 Supported image formats: JPEG, PNG, BMP, and WebP.
+
+## License
+
+Licensed under the MIT License. See [LICENSE](LICENSE).
