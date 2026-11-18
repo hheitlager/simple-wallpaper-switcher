@@ -2,7 +2,7 @@
 // @id              simple-wallpaper-switcher
 // @name            Simple Wallpaper Switcher
 // @description     Browse your wallpaper folders, preview thumbnails, and switch with smooth transitions.
-// @version         0.1.2
+// @version         0.1.3
 // @author          HHeitlager
 // @github          https://github.com/hheitlager
 // @include         windhawk.exe
@@ -45,7 +45,7 @@ Choose from the shared Emberveil themes and set the picker background to Solid, 
 
 Set your wallpaper folder in the mod settings, then open the picker from its tray icon or keyboard shortcut.
 
-Click a thumbnail to apply it. Use the arrow keys to move, Enter or Space to apply, and the mouse wheel to change pages.
+Click a thumbnail to apply it. Use the arrow keys to move, Enter or Space to apply, and the mouse wheel to change pages. Click the magnifying glass in the breadcrumb, or start typing, to filter filenames in the current folder. Press Escape to clear the search.
 
 Supported image formats: JPEG, PNG, BMP, and WebP.
 
@@ -115,6 +115,26 @@ Supported image formats: JPEG, PNG, BMP, and WebP.
       - solid: Solid
       - blur: Blur
       - acrylic: Acrylic
+- Picker:
+  - Position: center
+    $name: Picker position
+    $description: Choose where the picker opens within the monitor's usable area.
+    $options:
+      - top-left: Top left
+      - top-center: Top center
+      - top-right: Top right
+      - middle-left: Middle left
+      - center: Center
+      - middle-right: Middle right
+      - bottom-left: Bottom left
+      - bottom-center: Bottom center
+      - bottom-right: Bottom right
+  - OffsetX: 0
+    $name: Horizontal offset
+    $description: Move the picker left or right from its anchor position, in pixels. Positive values move right.
+  - OffsetY: 0
+    $name: Vertical offset
+    $description: Move the picker up or down from its anchor position, in pixels. Positive values move down.
 */
 // ==/WindhawkModSettings==
 
@@ -155,6 +175,7 @@ constexpr UINT kTrayCallback = WM_APP + 1;
 constexpr UINT kChooseFolder = 1003;
 constexpr UINT kFolderLabelId = 3001;
 constexpr UINT kPageLabelId = 3002;
+constexpr UINT kSearchEditId = 3003;
 constexpr UINT kTrayOpen = 2001;
 constexpr UINT kTrayPrevious = 2002;
 constexpr UINT kTrayNext = 2003;
@@ -165,6 +186,8 @@ constexpr UINT kReloadSettings = WM_APP + 10;
 constexpr UINT kWallpaperChangeDone = WM_APP + 11;
 constexpr UINT kImageListReady = WM_APP + 12;
 constexpr UINT kThumbnailPageReady = WM_APP + 13;
+constexpr UINT_PTR kSearchFilterTimer = 0xB743;
+constexpr UINT kSearchFilterDelayMs = 160;
 constexpr UINT kFirstTileId = 4000;
 constexpr size_t kPageSize = 12;
 constexpr size_t kThumbnailCachePages = 3;
@@ -174,6 +197,11 @@ constexpr UINT kThumbnailWidth = 128;
 constexpr UINT kThumbnailHeight = 76;
 constexpr int kThumbnailCornerDiameter = 16;
 constexpr int kSelectedBorderWidth = 3;
+constexpr int kBreadcrumbSearchButtonWidth = 30;
+constexpr int kBreadcrumbSearchEditWidth = 150;
+constexpr int kBreadcrumbSearchEditInset = 5;
+constexpr int kSearchTextPadding = 7;
+constexpr int kPickerEdgeMargin = 12;
 constexpr PCWSTR kWindowClass = L"SimpleWallpaperSwitcherWindow";
 constexpr PCWSTR kBackdropWindowClass = L"SimpleWallpaperSwitcherBackdrop";
 
@@ -185,6 +213,9 @@ COLORREF g_accent = RGB(207, 161, 255);
 std::wstring g_configuredTheme = L"system";
 std::wstring g_configuredMaterial = L"solid";
 bool g_automaticTheme = false;
+std::wstring g_pickerPosition = L"center";
+int g_pickerOffsetX = 0;
+int g_pickerOffsetY = 0;
 HWND g_pickerBackdropWindow = nullptr;
 
 HWND g_hostWindow;
@@ -192,6 +223,8 @@ HWND g_pickerWindow;
 HWND g_tiles[kPageSize];
 HWND g_folderLabel;
 HWND g_pageLabel;
+HWND g_searchEdit;
+HWND g_previousForegroundWindow;
 struct BreadcrumbSegment {
     std::wstring label;
     std::wstring folderPath;
@@ -229,6 +262,13 @@ UINT g_hotkeyKey = 'W';
 std::wstring g_folder;
 std::wstring g_lastSelectedPath;
 std::vector<std::wstring> g_images;
+std::vector<size_t> g_visibleImageIndices;
+std::wstring g_searchQuery;
+std::wstring g_pendingSearchQuery;
+RECT g_breadcrumbSearchButtonRect{};
+bool g_searchExpanded = false;
+bool g_searchButtonHovered = false;
+bool g_searchButtonClickHandled = false;
 bool g_folderUnavailable;
 bool g_imageScanInProgress;
 std::atomic<std::uint64_t> g_folderGeneration{0};
@@ -249,6 +289,7 @@ size_t g_viewAnchor;
 int g_currentImage = -1;
 int g_selectedImage = -1;
 HBRUSH g_backgroundBrush;
+HBRUSH g_searchBrush;
 void HidePickerBackdrop();
 void HidePickerWindow(HWND hwnd);
 void PositionPickerBackdrop();
@@ -316,6 +357,19 @@ void RefreshList();
 void ShowPicker();
 void ClearThumbnailCache();
 void SetViewAnchor(size_t image);
+void ApplyImageIndex(int image);
+bool HandlePickerKey(UINT key);
+void StepPage(int step);
+size_t DisplayImageCount();
+void RebuildSearchResults(bool invalidateThumbnailGeneration = true);
+void SetSearchExpanded(bool expanded, WCHAR initialCharacter = L'\0');
+void UpdateSearchFromEdit();
+void ApplyPendingSearch();
+void FocusSelectedResult();
+LRESULT CALLBACK SearchEditSubclassProc(HWND hwnd, UINT message,
+                                        WPARAM wParam, LPARAM lParam,
+                                        UINT_PTR subclassId,
+                                        DWORD_PTR referenceData);
 
 std::wstring ReadStringSetting(PCWSTR name, size_t capacity = 2048) {
     std::wstring value(capacity, L'\0');
@@ -580,6 +634,14 @@ void LoadSettings() {
     if (g_configuredMaterial.empty()) {
         g_configuredMaterial = L"solid";
     }
+    g_pickerPosition = ReadConfiguredStringSetting(L"Picker.Position");
+    if (g_pickerPosition.empty()) {
+        g_pickerPosition = L"center";
+    }
+    g_pickerOffsetX = std::clamp(Wh_GetIntSetting(L"Picker.OffsetX"),
+                                 -1000, 1000);
+    g_pickerOffsetY = std::clamp(Wh_GetIntSetting(L"Picker.OffsetY"),
+                                 -1000, 1000);
 
     const std::wstring configuredFolder =
         ReadConfiguredStringSetting(L"wallpaperFolder");
@@ -819,6 +881,9 @@ DWORD WINAPI ThumbnailPageThreadProc(void* parameter) {
         if (g_shuttingDown.load() ||
             job->generation != g_folderGeneration.load()) {
             break;
+        }
+        if (job->paths[slot].empty()) {
+            continue;
         }
         bitmaps[slot] = CreateThumbnailBitmap(factory.get(),
                                                job->paths[slot].c_str());
@@ -1061,7 +1126,7 @@ bool MeasureBreadcrumbMenuItem(HWND hwnd, MEASUREITEMSTRUCT* item) {
         item->itemHeight = 10;
     } else {
         const int height = (int)textSize.cy + 14;
-        item->itemHeight = (UINT)(height < 32 ? 32 : height);
+        item->itemHeight = (UINT)(height < 29 ? 29 : height);
     }
     return true;
 }
@@ -1416,11 +1481,175 @@ void UpdateFolderLabel() {
     SendMessageW(g_folderLabel, WM_SETREDRAW, TRUE, 0);
     InvalidateRect(g_folderLabel, nullptr, FALSE);
 }
+
+size_t DisplayImageCount() {
+    return g_visibleImageIndices.size();
+}
+
+void RebuildSearchResults(bool invalidateThumbnailGeneration) {
+    g_visibleImageIndices.clear();
+    g_visibleImageIndices.reserve(g_images.size());
+    for (size_t i = 0; i < g_images.size(); ++i) {
+        const WCHAR* filename = PathFindFileNameW(g_images[i].c_str());
+        if (g_searchQuery.empty() ||
+            StrStrIW(filename, g_searchQuery.c_str())) {
+            g_visibleImageIndices.push_back(i);
+        }
+    }
+
+    if (g_selectedImage < 0 ||
+        std::find(g_visibleImageIndices.begin(), g_visibleImageIndices.end(),
+                  (size_t)g_selectedImage) == g_visibleImageIndices.end()) {
+        g_selectedImage = g_visibleImageIndices.empty()
+                              ? -1
+                              : (int)g_visibleImageIndices.front();
+    }
+    g_viewAnchor = 0;
+    g_page = 0;
+    if (g_selectedImage >= 0) {
+        const auto selected = std::find(g_visibleImageIndices.begin(),
+                                        g_visibleImageIndices.end(),
+                                        (size_t)g_selectedImage);
+        if (selected != g_visibleImageIndices.end()) {
+            g_page = (size_t)std::distance(g_visibleImageIndices.begin(), selected) /
+                     kPageSize;
+        }
+    }
+    if (invalidateThumbnailGeneration && !g_imageScanInProgress) {
+        ++g_folderGeneration;
+    }
+    ClearThumbnailCache();
+    RefreshList();
+}
+
+void SetSearchExpanded(bool expanded, WCHAR initialCharacter) {
+    if (!g_searchEdit) {
+        return;
+    }
+    g_searchExpanded = expanded;
+    ShowWindow(g_searchEdit, expanded ? SW_SHOW : SW_HIDE);
+    if (expanded) {
+        if (initialCharacter) {
+            SetWindowTextW(g_searchEdit, std::wstring(1, initialCharacter).c_str());
+            UpdateSearchFromEdit();
+        }
+        BringWindowToTop(g_searchEdit);
+        SetFocus(g_searchEdit);
+        SendMessageW(g_searchEdit, EM_SETSEL, MAXLONG, MAXLONG);
+    } else {
+        SetWindowTextW(g_searchEdit, L"");
+        if (g_pickerWindow) {
+            KillTimer(g_pickerWindow, kSearchFilterTimer);
+        }
+        g_pendingSearchQuery.clear();
+        if (!g_searchQuery.empty()) {
+            g_searchQuery.clear();
+            RebuildSearchResults();
+        }
+        if (g_tiles[0] && IsWindowVisible(g_tiles[0])) {
+            SetFocus(g_tiles[0]);
+        } else if (g_pickerWindow) {
+            SetFocus(g_pickerWindow);
+        }
+    }
+    if (g_folderLabel) {
+        InvalidateRect(g_folderLabel, nullptr, FALSE);
+    }
+}
+
+void UpdateSearchFromEdit() {
+    if (!g_searchEdit) {
+        return;
+    }
+    const int length = GetWindowTextLengthW(g_searchEdit);
+    std::wstring query((size_t)length + 1, L'\0');
+    GetWindowTextW(g_searchEdit, query.data(), length + 1);
+    query.resize((size_t)length);
+    g_pendingSearchQuery = std::move(query);
+    if (!g_pickerWindow || g_pendingSearchQuery == g_searchQuery) {
+        if (g_pickerWindow) {
+            KillTimer(g_pickerWindow, kSearchFilterTimer);
+        }
+        return;
+    }
+    KillTimer(g_pickerWindow, kSearchFilterTimer);
+    if (!SetTimer(g_pickerWindow, kSearchFilterTimer,
+                  kSearchFilterDelayMs, nullptr)) {
+        ApplyPendingSearch();
+    }
+}
+
+void ApplyPendingSearch() {
+    if (g_pickerWindow) {
+        KillTimer(g_pickerWindow, kSearchFilterTimer);
+    }
+    if (g_pendingSearchQuery != g_searchQuery) {
+        g_searchQuery = std::move(g_pendingSearchQuery);
+        RebuildSearchResults();
+        if (g_searchEdit && IsWindowVisible(g_searchEdit)) {
+            InvalidateRect(g_searchEdit, nullptr, FALSE);
+        }
+    }
+}
+
+LRESULT CALLBACK SearchEditSubclassProc(HWND hwnd, UINT message,
+                                        WPARAM wParam, LPARAM lParam,
+                                        UINT_PTR subclassId,
+                                        DWORD_PTR referenceData) {
+    if (message == WM_KEYDOWN) {
+        if (wParam == VK_ESCAPE) {
+            if (GetWindowTextLengthW(hwnd) > 0) {
+                SetWindowTextW(hwnd, L"");
+                UpdateSearchFromEdit();
+                SendMessageW(hwnd, EM_SETSEL, 0, 0);
+            } else {
+                PostMessageW(GetAncestor(hwnd, GA_ROOT), WM_CLOSE, 0, 0);
+            }
+            return 0;
+        }
+        if (wParam == VK_RETURN) {
+            ApplyPendingSearch();
+            if (g_selectedImage >= 0) {
+                ApplyImageIndex(g_selectedImage);
+            }
+            return 0;
+        }
+        if (wParam == VK_TAB) {
+            FocusSelectedResult();
+            return 0;
+        }
+        if ((wParam == VK_LEFT || wParam == VK_RIGHT ||
+             wParam == VK_UP || wParam == VK_DOWN) &&
+            !(GetKeyState(VK_SHIFT) & 0x8000) &&
+            !(GetKeyState(VK_CONTROL) & 0x8000)) {
+            ApplyPendingSearch();
+            HandlePickerKey((UINT)wParam);
+            return 0;
+        }
+    }
+    if (message == WM_MOUSEWHEEL) {
+        StepPage(GET_WHEEL_DELTA_WPARAM(wParam) > 0 ? -1 : 1);
+        return 0;
+    }
+    const LRESULT result =
+        DefSubclassProc(hwnd, message, wParam, lParam);
+    if (message == WM_CHAR || message == WM_KEYDOWN ||
+        message == WM_KEYUP || message == WM_SETTEXT ||
+        message == WM_PASTE || message == WM_CUT || message == WM_CLEAR ||
+        message == WM_UNDO) {
+        // Let normal message processing finish, then repaint without erasing
+        // the field or synchronously flashing it.
+        InvalidateRect(hwnd, nullptr, FALSE);
+    }
+    return result;
+}
+
 void UpdatePageLabel() {
     if (!g_pageLabel) {
         return;
     }
-    const size_t pages = (g_images.size() + kPageSize - 1) / kPageSize;
+    const size_t count = DisplayImageCount();
+    const size_t pages = (count + kPageSize - 1) / kPageSize;
     std::wstring label;
     if (g_images.empty()) {
         if (g_folder.empty()) {
@@ -1432,6 +1661,8 @@ void UpdatePageLabel() {
         } else {
             label = L"No supported images found.";
         }
+    } else if (count == 0 && !g_searchQuery.empty()) {
+        label = L"No matching wallpapers.";
     } else {
         label = std::to_wstring(g_page + 1) + L" / " +
                 std::to_wstring(pages);
@@ -1446,7 +1677,7 @@ bool IsPageInList(const std::vector<size_t>& pages, size_t page) {
 std::vector<size_t> DesiredThumbnailPages() {
     std::vector<size_t> pages;
     const size_t pageCount =
-        (g_images.size() + kPageSize - 1) / kPageSize;
+        (DisplayImageCount() + kPageSize - 1) / kPageSize;
     if (!pageCount) {
         return pages;
     }
@@ -1503,45 +1734,58 @@ bool HasPendingPage(size_t page) {
 }
 
 size_t ImageIndexForPageSlot(size_t page, size_t slot) {
-    if (g_images.empty()) {
+    const size_t count = g_visibleImageIndices.size();
+    const size_t displayPosition = page * kPageSize + slot;
+    if (!count || displayPosition >= count) {
         return g_images.size();
     }
-    const size_t count = g_images.size();
-    const size_t offset = (page * kPageSize + slot) % count;
-    return (g_viewAnchor + offset) % count;
+    return g_visibleImageIndices[(g_viewAnchor + displayPosition) % count];
 }
 
 size_t PageForImageIndex(size_t image) {
-    if (g_images.empty()) {
+    if (g_visibleImageIndices.empty()) {
         return 0;
     }
-    const size_t count = g_images.size();
-    image %= count;
+    const auto found = std::find(g_visibleImageIndices.begin(),
+                                 g_visibleImageIndices.end(), image);
+    if (found == g_visibleImageIndices.end()) return 0;
+    const size_t position = (size_t)std::distance(g_visibleImageIndices.begin(), found);
+    const size_t count = g_visibleImageIndices.size();
     const size_t anchor = g_viewAnchor % count;
-    const size_t offset = image >= anchor ? image - anchor
-                                          : count - (anchor - image);
+    const size_t offset = position >= anchor ? position - anchor
+                                             : count - (anchor - position);
     return offset / kPageSize;
 }
 
 size_t SlotForImageIndex(size_t image) {
-    if (g_images.empty()) {
+    if (g_visibleImageIndices.empty()) {
         return 0;
     }
-    const size_t count = g_images.size();
-    image %= count;
+    const auto found = std::find(g_visibleImageIndices.begin(),
+                                 g_visibleImageIndices.end(), image);
+    if (found == g_visibleImageIndices.end()) return 0;
+    const size_t position = (size_t)std::distance(g_visibleImageIndices.begin(), found);
+    const size_t count = g_visibleImageIndices.size();
     const size_t anchor = g_viewAnchor % count;
-    const size_t offset = image >= anchor ? image - anchor
-                                          : count - (anchor - image);
+    const size_t offset = position >= anchor ? position - anchor
+                                             : count - (anchor - position);
     return offset % kPageSize;
 }
 
 void SetViewAnchor(size_t image) {
-    if (g_images.empty()) {
+    if (g_visibleImageIndices.empty()) {
         g_viewAnchor = 0;
         g_page = 0;
         return;
     }
-    const size_t anchor = image % g_images.size();
+    const auto found = std::find(g_visibleImageIndices.begin(),
+                                 g_visibleImageIndices.end(), image);
+    if (found == g_visibleImageIndices.end()) {
+        g_viewAnchor = 0;
+        g_page = 0;
+        return;
+    }
+    const size_t anchor = (size_t)std::distance(g_visibleImageIndices.begin(), found);
     if (anchor != g_viewAnchor) {
         g_viewAnchor = anchor;
         // Cached page numbers now refer to a different sequence of images.
@@ -1571,13 +1815,15 @@ void PruneThumbnailCache(const std::vector<size_t>& desiredPages) {
 }
 
 bool StartThumbnailPageLoad(size_t page) {
-    if (g_images.empty()) {
+    if (g_visibleImageIndices.empty()) {
         return false;
     }
     std::vector<std::wstring> paths;
     paths.reserve(kPageSize);
     for (size_t slot = 0; slot < kPageSize; ++slot) {
-        paths.push_back(g_images[ImageIndexForPageSlot(page, slot)]);
+        const size_t image = ImageIndexForPageSlot(page, slot);
+        paths.push_back(image < g_images.size() ? g_images[image]
+                                                : std::wstring());
     }
     auto* job = new ThumbnailPageJob{g_hostWindow, g_folderGeneration.load(), page,
                                      std::move(paths)};
@@ -1591,7 +1837,7 @@ bool StartThumbnailPageLoad(size_t page) {
 }
 
 void ScheduleThumbnailWindow() {
-    if (g_imageScanInProgress || g_images.empty() || !g_hostWindow) {
+    if (g_imageScanInProgress || g_visibleImageIndices.empty() || !g_hostWindow) {
         return;
     }
     const std::vector<size_t> desiredPages = DesiredThumbnailPages();
@@ -1614,16 +1860,18 @@ void RefreshList() {
     if (!g_tiles[0]) {
         return;
     }
-    g_page = std::min(g_page, g_images.empty()
+    g_page = std::min(g_page, g_visibleImageIndices.empty()
                                   ? size_t(0)
-                                  : (g_images.size() - 1) / kPageSize);
+                                  : (g_visibleImageIndices.size() - 1) / kPageSize);
     ScheduleThumbnailWindow();
 
     for (size_t slot = 0; slot < kPageSize; ++slot) {
         if (g_tiles[slot]) {
-            ShowWindow(g_tiles[slot], g_images.empty() ? SW_HIDE : SW_SHOW);
+            const bool slotHasImage =
+                g_page * kPageSize + slot < DisplayImageCount();
+            ShowWindow(g_tiles[slot], slotHasImage ? SW_SHOW : SW_HIDE);
             InvalidateRect(g_tiles[slot], nullptr, TRUE);
-            if (!g_images.empty()) {
+            if (slotHasImage) {
                 UpdateWindow(g_tiles[slot]);
             }
         }
@@ -1634,7 +1882,18 @@ void RefreshList() {
 
 void StartImageScan() {
     const std::uint64_t generation = ++g_folderGeneration;
+    if (g_pickerWindow) {
+        KillTimer(g_pickerWindow, kSearchFilterTimer);
+    }
     g_images.clear();
+    g_visibleImageIndices.clear();
+    g_searchQuery.clear();
+    g_pendingSearchQuery.clear();
+    g_searchExpanded = false;
+    if (g_searchEdit) {
+        SetWindowTextW(g_searchEdit, L"");
+        ShowWindow(g_searchEdit, SW_HIDE);
+    }
     g_viewAnchor = 0;
     g_page = 0;
     g_selectedImage = -1;
@@ -2868,6 +3127,15 @@ void ApplyImageIndex(int image) {
     if (image < 0 || image >= (int)g_images.size()) {
         return;
     }
+    if (g_searchEdit && GetFocus() == g_searchEdit) {
+        const size_t slot = SlotForImageIndex((size_t)image);
+        if (slot < kPageSize && g_tiles[slot] &&
+            IsWindowVisible(g_tiles[slot])) {
+            SetFocus(g_tiles[slot]);
+        } else if (g_pickerWindow) {
+            SetFocus(g_pickerWindow);
+        }
+    }
     PersistSelectedImage(image);
     UpdateFolderLabel();
     for (HWND tile : g_tiles) {
@@ -2903,28 +3171,33 @@ void StepImage(int step) {
 
 void StepPage(int step) {
     const int pages = (int)std::max<size_t>(
-        1, (g_images.size() + kPageSize - 1) / kPageSize);
+        1, (DisplayImageCount() + kPageSize - 1) / kPageSize);
     const int page = ((int)g_page + step % pages + pages) % pages;
     if ((size_t)page == g_page) {
         return;
     }
     g_page = (size_t)page;
-    g_selectedImage = g_images.empty()
+    g_selectedImage = g_visibleImageIndices.empty()
                           ? -1
                           : (int)ImageIndexForPageSlot(g_page, 0);
     RefreshList();
 }
 
 void MoveSelection(int delta) {
-    if (g_images.empty()) {
+    if (g_visibleImageIndices.empty()) {
         return;
     }
-    int current = g_selectedImage;
-    if (current < 0 || current >= (int)g_images.size()) {
-        current = g_currentImage >= 0 ? g_currentImage : 0;
-    }
-    const int count = (int)g_images.size();
-    const int next = (current + delta % count + count) % count;
+    const int count = (int)g_visibleImageIndices.size();
+    auto selected = std::find(g_visibleImageIndices.begin(),
+                              g_visibleImageIndices.end(),
+                              g_selectedImage >= 0
+                                  ? (size_t)g_selectedImage
+                                  : SIZE_MAX);
+    int current = selected == g_visibleImageIndices.end()
+                      ? 0
+                      : (int)std::distance(g_visibleImageIndices.begin(), selected);
+    const int nextPosition = (current + delta % count + count) % count;
+    const int next = (int)g_visibleImageIndices[(size_t)nextPosition];
     g_selectedImage = next;
     const size_t page = PageForImageIndex((size_t)next);
     if (page != g_page) {
@@ -2940,6 +3213,26 @@ void MoveSelection(int delta) {
     }
     const size_t slot = SlotForImageIndex((size_t)next);
     if (g_tiles[slot]) {
+        SetFocus(g_tiles[slot]);
+    }
+}
+
+void FocusSelectedResult() {
+    ApplyPendingSearch();
+    if (g_selectedImage < 0) {
+        if (g_pickerWindow) {
+            SetFocus(g_pickerWindow);
+        }
+        return;
+    }
+
+    const size_t page = PageForImageIndex((size_t)g_selectedImage);
+    if (page != g_page) {
+        g_page = page;
+        RefreshList();
+    }
+    const size_t slot = SlotForImageIndex((size_t)g_selectedImage);
+    if (slot < kPageSize && g_tiles[slot] && IsWindowVisible(g_tiles[slot])) {
         SetFocus(g_tiles[slot]);
     }
 }
@@ -2976,7 +3269,24 @@ LRESULT CALLBACK TileSubclassProc(HWND hwnd, UINT message, WPARAM wParam,
         return 0;
     }
     if (message == WM_KEYDOWN && wParam == VK_ESCAPE) {
-        PostMessageW(GetAncestor(hwnd, GA_ROOT), WM_CLOSE, 0, 0);
+        if (!g_searchQuery.empty()) {
+            if (g_searchEdit) SetWindowTextW(g_searchEdit, L"");
+            UpdateSearchFromEdit();
+        } else {
+            PostMessageW(GetAncestor(hwnd, GA_ROOT), WM_CLOSE, 0, 0);
+        }
+        return 0;
+    }
+    if (message == WM_KEYDOWN && wParam == VK_TAB &&
+        (GetKeyState(VK_SHIFT) & 0x8000) && g_searchEdit &&
+        g_searchExpanded) {
+        SetFocus(g_searchEdit);
+        SendMessageW(g_searchEdit, EM_SETSEL, MAXLONG, MAXLONG);
+        return 0;
+    }
+    if (message == WM_CHAR && wParam >= 0x20 && wParam != 0x7F &&
+        !g_searchExpanded) {
+        SetSearchExpanded(true, (WCHAR)wParam);
         return 0;
     }
     if (message == WM_KEYDOWN && HandlePickerKey((UINT)wParam)) {
@@ -2992,9 +3302,26 @@ LRESULT CALLBACK TileSubclassProc(HWND hwnd, UINT message, WPARAM wParam,
 LRESULT CALLBACK BreadcrumbSubclassProc(HWND hwnd, UINT message,
                                          WPARAM wParam, LPARAM lParam,
                                          UINT_PTR, DWORD_PTR) {
+    if (message == WM_LBUTTONDOWN) {
+        const POINT point{(int)(short)LOWORD(lParam),
+                          (int)(short)HIWORD(lParam)};
+        if (PtInRect(&g_breadcrumbSearchButtonRect, point)) {
+            g_searchButtonClickHandled = true;
+            SetSearchExpanded(!g_searchExpanded);
+            return 0;
+        }
+    }
     if (message == WM_LBUTTONUP) {
         const POINT point{(int)(short)LOWORD(lParam),
                           (int)(short)HIWORD(lParam)};
+        if (g_searchButtonClickHandled) {
+            g_searchButtonClickHandled = false;
+            return 0;
+        }
+        if (PtInRect(&g_breadcrumbSearchButtonRect, point)) {
+            SetSearchExpanded(true);
+            return 0;
+        }
         if (g_suppressedBreadcrumbClickSegment >= 0) {
             const ULONGLONG now = GetTickCount64();
             if (now > g_suppressBreadcrumbClickUntil) {
@@ -3049,9 +3376,14 @@ LRESULT CALLBACK BreadcrumbSubclassProc(HWND hwnd, UINT message,
         track.dwFlags = TME_LEAVE;
         track.hwndTrack = hwnd;
         TrackMouseEvent(&track);
-
         const POINT point{(int)(short)LOWORD(lParam),
                           (int)(short)HIWORD(lParam)};
+        const bool searchHovered = PtInRect(&g_breadcrumbSearchButtonRect, point);
+        if (searchHovered != g_searchButtonHovered) {
+            g_searchButtonHovered = searchHovered;
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+
         int hoveredSegment = -1;
         for (const BreadcrumbHitTarget& target : g_breadcrumbHitTargets) {
             if (PtInRect(&target.hoverRect, point)) {
@@ -3066,6 +3398,10 @@ LRESULT CALLBACK BreadcrumbSubclassProc(HWND hwnd, UINT message,
             InvalidateBreadcrumbSegment(hwnd, hoveredSegment);
         }
     } else if (message == WM_MOUSELEAVE) {
+        if (g_searchButtonHovered) {
+            g_searchButtonHovered = false;
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
         if (g_hoverBreadcrumbSegment != -1) {
             const int previousSegment = g_hoverBreadcrumbSegment;
             g_hoverBreadcrumbSegment = -1;
@@ -3077,6 +3413,7 @@ LRESULT CALLBACK BreadcrumbSubclassProc(HWND hwnd, UINT message,
         GetCursorPos(&cursor);
         ScreenToClient(hwnd, &cursor);
         bool clickable = false;
+        clickable = PtInRect(&g_breadcrumbSearchButtonRect, cursor);
         for (const BreadcrumbHitTarget& target : g_breadcrumbHitTargets) {
             if (PtInRect(&target.hoverRect, cursor)) {
                 clickable = true;
@@ -3089,6 +3426,74 @@ LRESULT CALLBACK BreadcrumbSubclassProc(HWND hwnd, UINT message,
     return DefSubclassProc(hwnd, message, wParam, lParam);
 }
 
+void PositionPickerWindow(HMONITOR monitor) {
+    if (!g_pickerWindow) {
+        return;
+    }
+    if (!monitor) {
+        monitor = MonitorFromWindow(g_pickerWindow, MONITOR_DEFAULTTONEAREST);
+    }
+    MONITORINFO info{sizeof(info)};
+    if (!monitor || !GetMonitorInfoW(monitor, &info)) {
+        return;
+    }
+
+    RECT windowRect{};
+    int width = 560;
+    int height = 360;
+    if (GetWindowRect(g_pickerWindow, &windowRect)) {
+        width = windowRect.right - windowRect.left;
+        height = windowRect.bottom - windowRect.top;
+    }
+
+    const RECT& work = info.rcWork;
+    const int workWidth = work.right - work.left;
+    const int workHeight = work.bottom - work.top;
+    const int horizontalMargin =
+        std::min(kPickerEdgeMargin, std::max(0, (workWidth - width) / 2));
+    const int verticalMargin =
+        std::min(kPickerEdgeMargin, std::max(0, (workHeight - height) / 2));
+    const LONG left = work.left + horizontalMargin;
+    const LONG right = std::max<LONG>(
+        left, work.right - width - horizontalMargin);
+    const LONG top = work.top + verticalMargin;
+    const LONG bottom = std::max<LONG>(
+        top, work.bottom - height - verticalMargin);
+
+    LONG x = left + std::max<LONG>(0, (right - left) / 2);
+    LONG y = top + std::max<LONG>(0, (bottom - top) / 2);
+    const bool isLeft = g_pickerPosition == L"top-left" ||
+                        g_pickerPosition == L"middle-left" ||
+                        g_pickerPosition == L"bottom-left";
+    const bool isRight = g_pickerPosition == L"top-right" ||
+                         g_pickerPosition == L"middle-right" ||
+                         g_pickerPosition == L"bottom-right";
+    const bool isTop = g_pickerPosition == L"top-left" ||
+                       g_pickerPosition == L"top-center" ||
+                       g_pickerPosition == L"top-right";
+    const bool isBottom = g_pickerPosition == L"bottom-left" ||
+                          g_pickerPosition == L"bottom-center" ||
+                          g_pickerPosition == L"bottom-right";
+    if (isLeft) {
+        x = left;
+    } else if (isRight) {
+        x = right;
+    }
+    if (isTop) {
+        y = top;
+    } else if (isBottom) {
+        y = bottom;
+    }
+    // Middle-left and middle-right already use the vertical center; the
+    // three center-column anchors already use the horizontal center.
+    x = std::clamp<LONG>(x + g_pickerOffsetX, work.left,
+                         std::max<LONG>(work.left, work.right - width));
+    y = std::clamp<LONG>(y + g_pickerOffsetY, work.top,
+                         std::max<LONG>(work.top, work.bottom - height));
+    SetWindowPos(g_pickerWindow, HWND_TOPMOST, (int)x, (int)y, width, height,
+                 SWP_NOACTIVATE);
+}
+
 void ShowPicker() {
     if (!g_pickerWindow) {
         return;
@@ -3097,31 +3502,30 @@ void ShowPicker() {
         StartImageScan();
     }
     if (!IsWindowVisible(g_pickerWindow)) {
+        HWND foreground = GetForegroundWindow();
+        if (foreground && GetAncestor(foreground, GA_ROOT) != g_pickerWindow &&
+            foreground != g_pickerBackdropWindow) {
+            g_previousForegroundWindow =
+                GetAncestor(foreground, GA_ROOT);
+        }
         POINT cursor{};
         GetCursorPos(&cursor);
-        MONITORINFO info{sizeof(info)};
         HMONITOR monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
-        if (monitor && GetMonitorInfoW(monitor, &info)) {
-            constexpr int width = 560;
-            constexpr int height = 360;
-            const RECT& work = info.rcWork;
-            const int x = work.left +
-                          std::max(0L, (work.right - work.left - width) / 2);
-            const int y = work.top +
-                          std::max(0L, (work.bottom - work.top - height) / 2);
-            SetWindowPos(g_pickerWindow, HWND_TOPMOST, x, y, width, height,
-                         SWP_NOACTIVATE);
-        }
+        PositionPickerWindow(monitor);
     }
-    if (g_currentImage >= 0 && g_currentImage < (int)g_images.size()) {
+    const bool currentIsVisible = g_currentImage >= 0 &&
+        std::find(g_visibleImageIndices.begin(), g_visibleImageIndices.end(),
+                  (size_t)g_currentImage) != g_visibleImageIndices.end();
+    if (currentIsVisible) {
         // Reopening returns to the last wallpaper applied through the mod,
         // even if the user browsed to another page before closing the picker.
         g_selectedImage = g_currentImage;
         g_page = PageForImageIndex((size_t)g_currentImage);
         RefreshList();
     } else if (g_selectedImage < 0 ||
-               g_selectedImage >= (int)g_images.size()) {
-        g_selectedImage = g_images.empty()
+               std::find(g_visibleImageIndices.begin(), g_visibleImageIndices.end(),
+                         (size_t)g_selectedImage) == g_visibleImageIndices.end()) {
+        g_selectedImage = g_visibleImageIndices.empty()
                               ? -1
                               : (int)ImageIndexForPageSlot(g_page, 0);
     }
@@ -3264,7 +3668,7 @@ bool DrawBreadcrumb(const DRAWITEMSTRUCT* item) {
                           : nullptr;
 
     const int left = item->rcItem.left + 1;
-    const int right = item->rcItem.right - 1;
+    const int right = item->rcItem.right - kBreadcrumbSearchButtonWidth - 1;
     const int itemHeight = item->rcItem.bottom - item->rcItem.top;
     constexpr int separatorGap = 8;
     constexpr int breadcrumbIconGap = 5;
@@ -3409,6 +3813,40 @@ bool DrawBreadcrumb(const DRAWITEMSTRUCT* item) {
         }
     }
 
+    const int searchLeft = item->rcItem.right - kBreadcrumbSearchButtonWidth;
+    if (g_searchExpanded) {
+        RECT searchFieldPaint{
+            searchLeft - kBreadcrumbSearchEditWidth,
+            item->rcItem.top + 2,
+            item->rcItem.right - 1,
+            item->rcItem.bottom - 2};
+        Gdiplus::Graphics graphics(dc);
+        graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        FillRoundedMenuItem(graphics, searchFieldPaint, 6.0f, g_surface);
+    }
+    g_breadcrumbSearchButtonRect = {
+        searchLeft - item->rcItem.left, 0,
+        item->rcItem.right - item->rcItem.left, itemHeight};
+    RECT searchButtonPaint{searchLeft, item->rcItem.top + 2,
+                           item->rcItem.right - 1,
+                           item->rcItem.bottom - 2};
+    if (!g_searchExpanded && g_searchButtonHovered) {
+        Gdiplus::Graphics graphics(dc);
+        graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        FillRoundedMenuItem(graphics, searchButtonPaint, 4.0f, g_surface);
+    }
+    if (g_breadcrumbIconFont) {
+        HGDIOBJ priorFont = SelectObject(dc, g_breadcrumbIconFont);
+        const WCHAR searchGlyph[] = {0xE721, L'\0'};
+        RECT searchGlyphRect{searchLeft, item->rcItem.top,
+                            item->rcItem.right - 1, item->rcItem.bottom};
+        SetTextColor(dc, g_searchButtonHovered || g_searchExpanded
+                             ? g_text : g_muted);
+        DrawTextW(dc, searchGlyph, 1, &searchGlyphRect,
+                  DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+        if (priorFont) SelectObject(dc, priorFont);
+    }
+
     if (oldFont) {
         SelectObject(dc, oldFont);
     }
@@ -3447,7 +3885,7 @@ bool DrawPageLabel(const DRAWITEMSTRUCT* item) {
     const int right = item->rcItem.right;
     const int top = item->rcItem.top;
     const int bottom = item->rcItem.bottom;
-    if (g_images.empty()) {
+    if (g_images.empty() || DisplayImageCount() == 0) {
         WCHAR message[256]{};
         GetWindowTextW(item->hwndItem, message,
                        (int)(sizeof(message) / sizeof(message[0])));
@@ -3484,7 +3922,7 @@ bool DrawPageLabel(const DRAWITEMSTRUCT* item) {
 
         const std::wstring pageText =
             std::to_wstring(g_page + 1) + L" / " +
-            std::to_wstring((g_images.size() + kPageSize - 1) / kPageSize);
+            std::to_wstring((DisplayImageCount() + kPageSize - 1) / kPageSize);
         drawText(pageText.c_str(), (int)pageText.size(), 10);
         const WCHAR separator[] = {0x00B7, L'\0'};
         drawText(separator, 1, 10);
@@ -3729,6 +4167,9 @@ bool DrawTileButton(const DRAWITEMSTRUCT* item) {
     const size_t slot = item->CtlID - kFirstTileId;
     const size_t index = ImageIndexForPageSlot(g_page, slot);
     FillRect(item->hDC, &item->rcItem, g_backgroundBrush);
+    if (index >= g_images.size()) {
+        return true;
+    }
     HBITMAP thumbnail = CachedThumbnail(g_page, slot);
     if (!thumbnail && HasPendingPage(g_page)) {
         HGDIOBJ oldFont = g_loadingFont
@@ -3925,10 +4366,33 @@ void HidePickerWindow(HWND hwnd) {
     const bool usesBackdrop =
         _wcsicmp(g_configuredMaterial.c_str(), L"blur") == 0 ||
         _wcsicmp(g_configuredMaterial.c_str(), L"acrylic") == 0;
+    const bool wasForeground = GetForegroundWindow() == hwnd;
+    if (GetFocus() == g_searchEdit) {
+        SetFocus(hwnd);
+    }
+    KillTimer(hwnd, kSearchFilterTimer);
+    const bool hadActiveSearch = !g_searchQuery.empty();
+    g_searchExpanded = false;
+    g_searchQuery.clear();
+    g_pendingSearchQuery.clear();
+    if (g_searchEdit) {
+        SetWindowTextW(g_searchEdit, L"");
+        ShowWindow(g_searchEdit, SW_HIDE);
+    }
+    if (hadActiveSearch) {
+        RebuildSearchResults();
+    }
+    if (g_folderLabel) {
+        InvalidateRect(g_folderLabel, nullptr, FALSE);
+    }
     if (usesBackdrop || !AnimateWindow(hwnd, 130, AW_BLEND | AW_HIDE)) {
         ShowWindow(hwnd, SW_HIDE);
     }
     HidePickerBackdrop();
+    if (wasForeground && g_previousForegroundWindow &&
+        IsWindow(g_previousForegroundWindow)) {
+        SetForegroundWindow(g_previousForegroundWindow);
+    }
 }
 
 void SetPickerRoundRegion(HWND window, bool rounded, int diameter) {
@@ -4016,6 +4480,7 @@ void RedrawPickerChildren() {
         }
     };
     redraw(g_folderLabel);
+    redraw(g_searchEdit);
     redraw(g_pageLabel);
     for (HWND tile : g_tiles) {
         redraw(tile);
@@ -4056,6 +4521,10 @@ void RefreshPickerAppearance(HWND hwnd) {
         DeleteObject(g_backgroundBrush);
     }
     g_backgroundBrush = CreateSolidBrush(g_background);
+    if (g_searchBrush) {
+        DeleteObject(g_searchBrush);
+    }
+    g_searchBrush = CreateSolidBrush(g_surface);
     ApplyPickerMaterial(hwnd);
     if (hwnd) {
         RedrawWindow(hwnd, nullptr, nullptr,
@@ -4214,8 +4683,9 @@ LRESULT CALLBACK PickerProc(HWND hwnd, UINT message, WPARAM wParam,
                 ANTIALIASED_QUALITY, VARIABLE_PITCH | FF_DONTCARE,
                 L"Segoe Fluent Icons");
             g_folderLabel = CreateWindowExW(0, L"STATIC", L"",
-                WS_CHILD | WS_VISIBLE | SS_OWNERDRAW | SS_NOTIFY,
-                16, 13, 528, 24, hwnd,
+                WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS |
+                    SS_OWNERDRAW | SS_NOTIFY,
+                16, 13, 528, 33, hwnd,
                 (HMENU)(INT_PTR)kFolderLabelId, nullptr, nullptr);
             if (g_folderLabel && g_pickerFont) {
                 SendMessageW(g_folderLabel, WM_SETFONT,
@@ -4225,9 +4695,37 @@ LRESULT CALLBACK PickerProc(HWND hwnd, UINT message, WPARAM wParam,
                 SetWindowSubclass(g_folderLabel, BreadcrumbSubclassProc, 3,
                                   (DWORD_PTR)hwnd);
             }
+            g_searchEdit = CreateWindowExW(
+                0, L"EDIT", L"",
+                WS_CHILD | WS_TABSTOP | WS_CLIPSIBLINGS |
+                    ES_AUTOHSCROLL | ES_LEFT |
+                    ES_NOHIDESEL,
+                16 + 528 - kBreadcrumbSearchButtonWidth -
+                    kBreadcrumbSearchEditWidth + kBreadcrumbSearchEditInset,
+                20, kBreadcrumbSearchEditWidth - kBreadcrumbSearchEditInset - 5,
+                24, hwnd,
+                (HMENU)(INT_PTR)kSearchEditId, GetModuleHandleW(nullptr),
+                nullptr);
+            if (g_searchEdit) {
+                if (g_pickerFont) {
+                    SendMessageW(g_searchEdit, WM_SETFONT,
+                                 (WPARAM)g_pickerFont, TRUE);
+                }
+                SendMessageW(g_searchEdit, EM_SETCUEBANNER, TRUE,
+                             (LPARAM)L"Search wallpapers");
+                SendMessageW(g_searchEdit, EM_SETMARGINS,
+                             EC_LEFTMARGIN | EC_RIGHTMARGIN,
+                             MAKELONG(kSearchTextPadding,
+                                      kSearchTextPadding));
+                SetWindowTheme(g_searchEdit, L"", L"");
+                SetWindowSubclass(g_searchEdit, SearchEditSubclassProc, 4,
+                                  (DWORD_PTR)hwnd);
+                ShowWindow(g_searchEdit, SW_HIDE);
+            }
+            g_breadcrumbSearchButtonRect = {498, 0, 528, 33};
             for (size_t slot = 0; slot < kPageSize; ++slot) {
                 const int x = 14 + (int)(slot % kGridColumns) * 132;
-                const int y = 50 + (int)(slot / kGridColumns) * 82;
+                const int y = 59 + (int)(slot / kGridColumns) * 82;
                 g_tiles[slot] = CreateWindowExW(0, L"BUTTON", L"",
                     WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, x, y, kThumbnailWidth,
                     kThumbnailHeight, hwnd,
@@ -4239,7 +4737,7 @@ LRESULT CALLBACK PickerProc(HWND hwnd, UINT message, WPARAM wParam,
                 }
             }
             g_pageLabel = CreateWindowExW(0, L"STATIC", L"1 / 1",
-                WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 16, 314, 528, 24,
+                WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 16, 323, 528, 24,
                 hwnd, (HMENU)(INT_PTR)kPageLabelId, nullptr, nullptr);
             if (g_pageLabel && g_pickerFont) {
                 SendMessageW(g_pageLabel, WM_SETFONT,
@@ -4254,6 +4752,11 @@ LRESULT CALLBACK PickerProc(HWND hwnd, UINT message, WPARAM wParam,
             return 0;
         }
         case WM_COMMAND:
+            if (LOWORD(wParam) == kSearchEditId &&
+                HIWORD(wParam) == EN_CHANGE) {
+                UpdateSearchFromEdit();
+                return 0;
+            }
             switch (LOWORD(wParam)) {
                 case kChooseFolder: {
                     if (g_transitionActive) {
@@ -4273,10 +4776,10 @@ LRESULT CALLBACK PickerProc(HWND hwnd, UINT message, WPARAM wParam,
             if (LOWORD(wParam) >= kFirstTileId &&
                 LOWORD(wParam) < kFirstTileId + kPageSize) {
                 const size_t slot = LOWORD(wParam) - kFirstTileId;
-                const int image = (int)ImageIndexForPageSlot(g_page, slot);
-                if (!g_images.empty()) {
+                const size_t image = ImageIndexForPageSlot(g_page, slot);
+                if (image < g_images.size()) {
                     SetFocus(g_tiles[slot]);
-                    ApplyImageIndex(image);
+                    ApplyImageIndex((int)image);
                 }
                 return 0;
             }
@@ -4310,6 +4813,10 @@ LRESULT CALLBACK PickerProc(HWND hwnd, UINT message, WPARAM wParam,
                              : g_muted);
             SetBkMode((HDC)wParam, TRANSPARENT);
             return (LRESULT)g_backgroundBrush;
+        case WM_CTLCOLOREDIT:
+            SetTextColor((HDC)wParam, g_text);
+            SetBkColor((HDC)wParam, g_surface);
+            return (LRESULT)g_searchBrush;
         case WM_ERASEBKGND: {
             RECT client{};
             GetClientRect(hwnd, &client);
@@ -4341,6 +4848,10 @@ LRESULT CALLBACK PickerProc(HWND hwnd, UINT message, WPARAM wParam,
             }
             break;
         case WM_TIMER:
+            if (wParam == kSearchFilterTimer) {
+                ApplyPendingSearch();
+                return 0;
+            }
             if (wParam == kBreadcrumbChevronAnimationTimer) {
                 constexpr float animationStep = 12.0f;
                 if (g_breadcrumbChevronAngle <
@@ -4455,6 +4966,7 @@ LRESULT CALLBACK PickerProc(HWND hwnd, UINT message, WPARAM wParam,
             }
             KillTimer(hwnd, kBreadcrumbMenuDismissTimer);
             KillTimer(hwnd, kBreadcrumbChevronAnimationTimer);
+            KillTimer(hwnd, kSearchFilterTimer);
             for (HWND tile : g_tiles) {
                 if (tile) {
                     RemoveWindowSubclass(tile, TileSubclassProc, 1);
@@ -4463,6 +4975,10 @@ LRESULT CALLBACK PickerProc(HWND hwnd, UINT message, WPARAM wParam,
             if (g_folderLabel) {
                 RemoveWindowSubclass(g_folderLabel, BreadcrumbSubclassProc, 3);
                 g_folderLabel = nullptr;
+            }
+            if (g_searchEdit) {
+                RemoveWindowSubclass(g_searchEdit, SearchEditSubclassProc, 4);
+                g_searchEdit = nullptr;
             }
             if (g_breadcrumbMenuMouseHook) {
                 UnhookWindowsHookEx(g_breadcrumbMenuMouseHook);
@@ -4534,7 +5050,7 @@ LRESULT CALLBACK HostProc(HWND hwnd, UINT message, WPARAM wParam,
                         }
                     }
                 }
-                RefreshList();
+                RebuildSearchResults(false);
             }
             return 0;
         }
@@ -4599,6 +5115,9 @@ LRESULT CALLBACK HostProc(HWND hwnd, UINT message, WPARAM wParam,
             return 0;
         case kReloadSettings:
             RefreshPickerAppearance(g_pickerWindow);
+            if (g_pickerWindow && IsWindowVisible(g_pickerWindow)) {
+                PositionPickerWindow(nullptr);
+            }
             if (!RegisterPickerHotkey(hwnd)) {
                 Wh_Log(L"RegisterHotKey failed after settings change");
             }
@@ -4675,6 +5194,7 @@ DWORD WINAPI UiThreadProc(void*) {
     InitCommonControlsEx(&controls);
     ApplyPickerThemeColors();
     g_backgroundBrush = CreateSolidBrush(g_background);
+    g_searchBrush = CreateSolidBrush(g_surface);
     WNDCLASSEXW hostClass{sizeof(hostClass)};
     hostClass.lpfnWndProc = HostProc;
     hostClass.hInstance = GetModuleHandleW(nullptr);
@@ -4700,7 +5220,7 @@ DWORD WINAPI UiThreadProc(void*) {
     if (g_hostWindow) {
         g_pickerWindow = CreateWindowExW(WS_EX_TOOLWINDOW,
             kWindowClass, L"Simple Wallpaper Switcher",
-            WS_POPUP,
+            WS_POPUP | WS_CLIPCHILDREN,
             CW_USEDEFAULT, CW_USEDEFAULT, 560, 360, nullptr, nullptr,
             pickerClass.hInstance, nullptr);
         if (g_pickerWindow) {
@@ -4739,6 +5259,10 @@ DWORD WINAPI UiThreadProc(void*) {
     if (g_backgroundBrush) {
         DeleteObject(g_backgroundBrush);
         g_backgroundBrush = nullptr;
+    }
+    if (g_searchBrush) {
+        DeleteObject(g_searchBrush);
+        g_searchBrush = nullptr;
     }
     return 0;
 }
